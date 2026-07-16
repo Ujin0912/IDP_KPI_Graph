@@ -1,0 +1,7 @@
+id;label;node_type;dimension;subdimension;formula;value;unit;target;status
+ECO-01;Total Costs;KPI;Economic;Cost;{ECO-02} + {ECO-03};102000.0;EUR;100000;missed
+ECO-02;Capital Cost;Sub-KPI;Economic;Cost;{ECO-11} + {ECO-12};57000.0;EUR;60000;reached
+ECO-03;Overhead Cost;Sub-KPI;Economic;Cost;{ECO-13} + {ECO-14};45000.0;EUR;40000;missed
+ENV-01;Emissions to air;KPI;Environmental;Pollution;{ENV-02} + {ENV-03};5150.0;kg;5000;missed
+ENV-02;Emissions of acid gases;Sub-KPI;Environmental;Pollution;{ENV-11} + {ENV-12};2850.0;kg SO2-eq;3000;reached
+ENV-03;Emissions of ozone-depleting substances;Sub-KPI;Environmental;Pollution;{ENV-13} + {ENV-14};2300.0;kg CFC11-eq;2000;missed

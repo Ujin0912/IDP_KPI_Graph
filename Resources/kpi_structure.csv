@@ -1,0 +1,15 @@
+id;label;node_type;dimension;subdimension;parent;unit;formula;target;target_direction
+ECO-01;Total Costs;KPI;Economic;Cost;;EUR;{ECO-02} + {ECO-03};100000;min
+ECO-02;Capital Cost;Sub-KPI;Economic;Cost;ECO-01;EUR;{ECO-11} + {ECO-12};60000;min
+ECO-03;Overhead Cost;Sub-KPI;Economic;Cost;ECO-01;EUR;{ECO-13} + {ECO-14};40000;min
+ECO-11;Capital Cost 1;Measure;Economic;Cost;ECO-02;EUR;;;
+ECO-12;Capital Cost 2;Measure;Economic;Cost;ECO-02;EUR;;;
+ECO-13;Overhead Cost 1;Measure;Economic;Cost;ECO-03;EUR;;;
+ECO-14;Overhead Cost 2;Measure;Economic;Cost;ECO-03;EUR;;;
+ENV-01;Emissions to air;KPI;Environmental;Pollution;;kg;{ENV-02} + {ENV-03};5000;min
+ENV-02;Emissions of acid gases;Sub-KPI;Environmental;Pollution;ENV-01;kg SO2-eq;{ENV-11} + {ENV-12};3000;min
+ENV-03;Emissions of ozone-depleting substances;Sub-KPI;Environmental;Pollution;ENV-01;kg CFC11-eq;{ENV-13} + {ENV-14};2000;min
+ENV-11;NO2 emissions;Measure;Environmental;Pollution;ENV-02;kg SO2-eq;;;
+ENV-12;SO2 emissions;Measure;Environmental;Pollution;ENV-02;kg SO2-eq;;;
+ENV-13;CFC emissions;Measure;Environmental;Pollution;ENV-03;kg CFC11-eq;;;
+ENV-14;HCFC emissions;Measure;Environmental;Pollution;ENV-03;kg CFC11-eq;;;
