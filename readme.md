@@ -1,7 +1,5 @@
 KPI Node-Link Graph
 
-Was das Skript macht
-
 build_kpi_graph.py verwandelt drei einfache CSV-Dateien in einen gerichteten 
 Node-Link-Graphen (.gexf, z.B. für Gephi). Ein KPI wird dabei nur einmal 
 als Vorlage definiert (Formel, Dimension, Zielwert). Jeder Ort (Fabrik / Linie / 
@@ -36,7 +34,7 @@ Spalten:
 - target — Zielwert (leer, wenn kein Ziel)
 - target_direction — min (kleiner ist besser) oder max (größer ist besser)
 
-Beispiel (so soll eine Zeile aussehen):
+Beispiel:
 
 ```
 kpi_id;label;node_type;dimension;subdimension;parent;unit;formula;target;target_direction
@@ -104,6 +102,7 @@ Die Ergebnisse liegen danach im Ordner Output/:
 
 Ordnerstruktur
 
+```
 pythonProject/
 ├── build_kpi_graph.py
 ├── README.md
@@ -114,3 +113,4 @@ pythonProject/
 └── Output/            (wird automatisch erzeugt)
     ├── kpi_model.gexf
     └── log.txt
+```
