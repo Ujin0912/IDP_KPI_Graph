@@ -38,11 +38,11 @@ Spalten:
 
 Beispiel (so soll eine Zeile aussehen):
 
-kpi_id;label;node_type;dimension;subdimension;parent;unit;formula;target;target_direction\
-ENV-01;Energy per cell;KPI;Environmental;Energy;;kWh/cell;{ENV-11}/{PROD-01};15;min\
-ENV-11;Electricity consumption;Measure;Environmental;Energy;ENV-01;kWh;;;\
-SOC-01;Training hours per worker;KPI;Social;Workforce;;h/worker;{SOC-11}/{SOC-12};20;max\
-COST-01;Cost per cell;KPI;Economic;Cost;;EUR/cell;{COST-02}/{PROD-01};5;min
+'kpi_id;label;node_type;dimension;subdimension;parent;unit;formula;target;target_direction
+ENV-01;Energy per cell;KPI;Environmental;Energy;;kWh/cell;{ENV-11}/{PROD-01};15;min
+ENV-11;Electricity consumption;Measure;Environmental;Energy;ENV-01;kWh;;;
+SOC-01;Training hours per worker;KPI;Social;Workforce;;h/worker;{SOC-11}/{SOC-12};20;max
+COST-01;Cost per cell;KPI;Economic;Cost;;EUR/cell;{COST-02}/{PROD-01};5;min'
 
 
 2. structure.csv — die Fabrik-Struktur
