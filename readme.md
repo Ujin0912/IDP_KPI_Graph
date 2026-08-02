@@ -38,12 +38,13 @@ Spalten:
 
 Beispiel (so soll eine Zeile aussehen):
 
-'kpi_id;label;node_type;dimension;subdimension;parent;unit;formula;target;target_direction
+```
+kpi_id;label;node_type;dimension;subdimension;parent;unit;formula;target;target_direction
 ENV-01;Energy per cell;KPI;Environmental;Energy;;kWh/cell;{ENV-11}/{PROD-01};15;min
 ENV-11;Electricity consumption;Measure;Environmental;Energy;ENV-01;kWh;;;
 SOC-01;Training hours per worker;KPI;Social;Workforce;;h/worker;{SOC-11}/{SOC-12};20;max
 COST-01;Cost per cell;KPI;Economic;Cost;;EUR/cell;{COST-02}/{PROD-01};5;min'
-
+```
 
 2. structure.csv — die Fabrik-Struktur
 
@@ -57,12 +58,13 @@ Spalten:
 
 Beispiel:
 
+```
 node_id;label;level;parent\
 F1;Factory 1;Factory;\
 F1-L1;Electrode Line;Line;F1\
 F1-L1-C1;Formation Cell;Cell;F1-L1\
 F2;Factory 2;Factory;
-
+```
 
 3. measure_data.csv — die Messwerte
 
@@ -76,11 +78,13 @@ Spalten:
 
 Beispiel:
 
+```
 kpi_id;location_id;value\
 ENV-11;F1-L1-C1;900000\
 PROD-01;F1-L1-C1;50000\
 SOC-11;F1-L1-C1;900\
 ENV-11;F2-L1-C1;870000
+```
 
 
 Ausführen und Ergebnisse
