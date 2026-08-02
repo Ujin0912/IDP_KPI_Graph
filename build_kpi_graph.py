@@ -1,279 +1,200 @@
 """
 build_kpi_graph.py
-------------------
-INPUT   (erwartet in  <script dir>/Resources/ )
-  kpi_structure.csv  : KPI KAtalog (KPIs, Sub-KPIs, Messgrößen) inkl. Formeln
-  measure_data.csv   : NUR reine Messgrößendaten (was der Benutzer liefern soll)
+-----------------------------
+Kombiniert drei generische CSVs zu einem konkreten Node-Link-Graphen (GEXF).
 
-OUTPUT  (in <script dir>/Output/ )
-  kpi_values.csv     : KPIs + Sub-KPIs mit Formeln, ausgerechneten Werten und "Zielwerten"
-  node_table.csv     : Tabelle mit allen Nodes (Messgrößen + KPIs) -- inspection / debug
-  kpi_model.gexf     : .gexf Node-Link Graph für Gephi
+  Resources/kpi_catalogue.csv : KPI-Vorlagen (Formel, Dimension, Zielwert)
+  Resources/structure.csv     : Fabrik-Struktur (Factory / Line / Cell)
+  Resources/measure_data.csv  : Messwert je Messgröße UND Ort
 
-Formeln sind im kpi_structure file ausgedrückt mit anderen node-ids,
-z.B.{ECO-02} + {ECO-03}   or later  {ECO-01} / {ECO-02}
+Stuktur:
+  Ein KPI ist eine VORLAGE. Jeder Ort mit Messdaten bekommt eine eigene
+  INSTANZ des kompletten KPI-Baums. Knoten-ID = <kpi_id>@<location_id>.
 """
 
 import csv
 import re
-import colorsys
+from collections import defaultdict
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+BASE = Path(__file__).resolve().parent
+RES = BASE / "Resources"
+OUT = BASE / "Output"
+OUT.mkdir(exist_ok=True)
 
-BASE_DIR = Path(__file__).resolve().parent
-RESOURCES_DIR = BASE_DIR / "Resources"
-OUTPUT_DIR = BASE_DIR / "Output"
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-STRUCTURE_CSV = RESOURCES_DIR / "kpi_structure.csv"
-DATA_CSV = RESOURCES_DIR / "measure_data.csv"
-
-for _p in (STRUCTURE_CSV, DATA_CSV):
-    if not _p.exists():
-        raise FileNotFoundError(
-            f"Input file not found: {_p}\n(current working directory is: {Path.cwd()})")
-
-# ---------------------------------------------------------------------------
-# CONFIG -- zusätzliche Dimensionen?
-# ---------------------------------------------------------------------------
+# --- Konfiguration: drei Nachhaltigkeitssäulen --
 DIMENSIONS = {
-    "Environmental": "#0072B2",   # blau
-    "Economic":      "#E69F00",   # orange
-    "Cat3":          "#009E73",   # grün
-    "Cat4":          "#CC79A7",   # magenta
+    "Environmental": "#1B9E77",   # grün
+    "Economic":      "#D95F02",   # orange
+    "Social":        "#7570B3",   # violett
 }
 FALLBACK_COLOR = "#999999"
-
-# hellere Farben für niedrigere Dimensionen
-SUBDIM_LIGHTEN = 0.12
-LEVEL_LIGHTEN = 0.30
-
-
-# --- Knotengrösse ---------------------------------------------------------
-# Groesse skaliert mit der Anzahl Measures, die in einen Knoten einfliessen.
-# Diese Anzahl wird linear auf [MAX_NODE_SIZE * MIN_SIZE_RATIO, MAX_NODE_SIZE]
-# abgebildet. MIN_SIZE_RATIO stellt sicher, dass der kleinste Knoten nicht zu
-# klein wird und Measures sichtbar bleiben.
-MAX_NODE_SIZE = 60.0         # groesster Knoten (meiste Measures dahinter)
-MIN_SIZE_RATIO = 0.25        # kleinster Knoten = 25% des groessten
+LEVEL_LIGHTEN = 0.30              # pro Baum-Ebene heller
+MAX_SIZE = 60.0                   # größter Knoten
+MIN_RATIO = 0.25                  # kleinster Knoten = 25% des größten
 
 
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen
 # ---------------------------------------------------------------------------
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return list(csv.DictReader(f, delimiter=";"))
+
+
 def hex_to_rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
 def lighten(rgb, t):
-    """Farbe mit weiß vermischen t (0..1)"""
     return tuple(int(round(c + (255 - c) * t)) for c in rgb)
 
 
-def shift_hue(rgb, deg):
-    r, g, b = [c / 255 for c in rgb]
-    h, l, s = colorsys.rgb_to_hls(r, g, b)
-    r, g, b = colorsys.hls_to_rgb((h + deg / 360.0) % 1.0, l, s)
-    return tuple(int(round(c * 255)) for c in (r, g, b))
-
-
-def read_csv(path):
-    with open(path, encoding="utf-8") as f:
-        return list(csv.DictReader(f, delimiter=";"))
-
-
 # ---------------------------------------------------------------------------
-# 1) Struktur- und Messwerte laden
+# 1) Eingaben laden
 # ---------------------------------------------------------------------------
-nodes = {n["id"]: n for n in read_csv(STRUCTURE_CSV)}
-order = list(nodes)
-data = {d["id"]: float(d["value"]) for d in read_csv(DATA_CSV)}
+catalogue = {c["kpi_id"]: c for c in read(RES / "kpi_catalogue.csv")}
+structure = {s["node_id"]: s for s in read(RES / "structure.csv")}
 
-for nid, n in nodes.items():
-    if n["node_type"] == "Measure":
-        if nid not in data:
-            raise ValueError(f"No measure value delivered for {nid} ({n['label']})")
-        n["value"] = data[nid]
-    else:
-        n["value"] = None
+# Messwerte nach Ort gruppieren:  values[location_id][kpi_id] = Zahl
+values = defaultdict(dict)
+for row in read(RES / "measure_data.csv"):
+    values[row["location_id"]][row["kpi_id"]] = float(row["value"])
 
-# ---------------------------------------------------------------------------
-# 2) Formeln ausführen von Sub-KPIs
-# ---------------------------------------------------------------------------
 REF = re.compile(r"\{([^}]+)\}")
 
 
-def resolve(nid, stack=()):
-    n = nodes[nid]
-    if n["value"] is not None:
-        return n["value"]
-    if nid in stack:
-        raise ValueError(f"Circular formula: {' -> '.join(stack + (nid,))}")
-    formula = n["formula"]
-    if not formula:
-        raise ValueError(f"{nid} has neither a value nor a formula")
-    expr = REF.sub(lambda m: repr(resolve(m.group(1), stack + (nid,))), formula)
-    n["value"] = float(eval(expr, {"__builtins__": {}}, {}))
-    return n["value"]
-
-
-for nid in order:
-    resolve(nid)
-
-# --- Kanten: "Quelle beeinflusst Ziel", aus den Formeln abgeleitet ---------
-edges = []
-for nid, n in nodes.items():
-    for ref in REF.findall(n["formula"] or ""):
-        edges.append({"source": ref, "target": nid})
-
-# Einflussstaerke = Beitragsanteil der Quelle am Zielwert
-for e in edges:
-    tgt = nodes[e["target"]]["value"]
-    src = nodes[e["source"]]["value"]
-    share = abs(src) / abs(tgt) if tgt else 0.0
-    e["strength"] = round(min(share, 1.0), 4)
-    e["influence"] = "positive"          # vorerst nur Summen
-    e["relation"] = "aggregation"
-
-indeg = {nid: 0 for nid in nodes}
-for e in edges:
-    indeg[e["target"]] += 1
-
-children = {nid: [] for nid in nodes}
-for nid, n in nodes.items():
-    if n["parent"]:
-        children[n["parent"]].append(nid)
-
-
-def measure_count(nid):
-    # wie viele Measure-Knoten letztlich in diesen Knoten einfliessen
-    if nodes[nid]["node_type"] == "Measure":
-        return 0
-    return sum(1 if nodes[c]["node_type"] == "Measure" else measure_count(c)
-               for c in children[nid])
+# ---------------------------------------------------------------------------
+# 2) Formeln je Ort auflösen
+# ---------------------------------------------------------------------------
+def resolve(kid, loc, cache, stack=()):
+    if kid in cache:
+        return cache[kid]
+    node = catalogue[kid]
+    if not node["formula"]:                       # Messgröße -> Wert aus measure_data
+        if kid not in values[loc]:
+            raise ValueError(f"Messwert fehlt: {kid} @ {loc}")
+        cache[kid] = values[loc][kid]
+        return cache[kid]
+    if kid in stack:
+        raise ValueError(f"Zirkuläre Formel: {' -> '.join(stack + (kid,))}")
+    expr = REF.sub(lambda m: repr(resolve(m.group(1), loc, cache, stack + (kid,))),
+                   node["formula"])
+    cache[kid] = float(eval(expr, {"__builtins__": {}}, {}))
+    return cache[kid]
 
 
 # ---------------------------------------------------------------------------
-# 3) Zielstatus
+# 3) Struktur der Vorlage: Baum (parent) + Einfluss (Formel)
 # ---------------------------------------------------------------------------
-def status(n):
-    if not n["target"]:
-        return "no target"
-    ok = (n["value"] <= float(n["target"])) if n["target_direction"] == "min" \
-        else (n["value"] >= float(n["target"]))
-    return "reached" if ok else "missed"
+kids = defaultdict(list)                           # parent-Spalte -> Layout-Baum
+for kid, c in catalogue.items():
+    if c["parent"]:
+        kids[c["parent"]].append(kid)
+roots = [k for k, c in catalogue.items() if not c["parent"]]
 
 
-for n in nodes.values():
-    n["status"] = status(n)
-
-# ---------------------------------------------------------------------------
-# 4) Farben (Dimension -> Subdimension -> Ebene) und Groessen
-# ---------------------------------------------------------------------------
-subdims = {}
-for n in nodes.values():
-    subdims.setdefault(n["dimension"], [])
-    if n["subdimension"] not in subdims[n["dimension"]]:
-        subdims[n["dimension"]].append(n["subdimension"])
-
-
-def level(nid):
-    lvl, cur = 0, nodes[nid]
+def level(kid):
+    lvl, cur = 0, catalogue[kid]
     while cur["parent"]:
-        lvl += 1
-        cur = nodes[cur["parent"]]
+        lvl, cur = lvl + 1, catalogue[cur["parent"]]
     return lvl
 
 
-for nid, n in nodes.items():
-    base = hex_to_rgb(DIMENSIONS.get(n["dimension"], FALLBACK_COLOR))
-    i = subdims[n["dimension"]].index(n["subdimension"])
-    rgb = shift_hue(base, i * 12)                      # Subdimension: ähnlicher Farbton
-    rgb = lighten(rgb, i * SUBDIM_LIGHTEN + level(nid) * LEVEL_LIGHTEN)
-    n["color"] = rgb
-    n["level"] = level(nid)
-    n["measures_behind"] = measure_count(nid)
+def feeding_measures(kid):                         # Messgrößen, die (via Formel) einfliessen
+    node = catalogue[kid]
+    if not node["formula"]:
+        return {kid}
+    s = set()
+    for ref in REF.findall(node["formula"]):
+        s |= feeding_measures(ref)
+    return s
 
-# "measures_behind" auf [min_size, MAX_NODE_SIZE] abbilden, damit der kleinste
-# Knoten nie kleiner als MIN_SIZE_RATIO * MAX_NODE_SIZE wird
-min_size = MAX_NODE_SIZE * MIN_SIZE_RATIO
-counts = [n["measures_behind"] for n in nodes.values()]
-lo, hi = min(counts), max(counts)
-span = (hi - lo) or 1                                  # Division durch 0 vermeiden
-for n in nodes.values():
-    t = (n["measures_behind"] - lo) / span             # 0..1
-    n["size"] = min_size + t * (MAX_NODE_SIZE - min_size)
+
+mcount = {kid: (0 if not c["formula"] else len(feeding_measures(kid)))
+          for kid, c in catalogue.items()}
+
+# Größe: Anzahl einfließender Messgrößen linear auf [min_size, MAX_SIZE]
+lo, hi = min(mcount.values()), max(mcount.values())
+span = (hi - lo) or 1
+min_size = MAX_SIZE * MIN_RATIO
+size = {kid: min_size + (mcount[kid] - lo) / span * (MAX_SIZE - min_size)
+        for kid in catalogue}
+
+
+def factory_of(locid):                             # oberster Knoten
+    cur = structure[locid]
+    while cur["parent"]:
+        cur = structure[cur["parent"]]
+    return cur["node_id"]
+
 
 # ---------------------------------------------------------------------------
-# 5) Layout: ein Baum pro Wurzel, Ebene = x, Geschwister ueber y verteilt
+# 4) Instanzen erzeugen: pro Ort mit Daten ein kompletter KPI-Baum
 # ---------------------------------------------------------------------------
-roots = [nid for nid, n in nodes.items() if not n["parent"]]
-pos, y_cursor = {}, [0.0]
+inst = {}                                          # (kid, loc) -> dict mit value/status/pos...
+pos = {}
+y_base = 0.0
+locations = list(values)                           # Orte, die Messdaten haben
 
 
-def place(nid, depth):
-    kids = children[nid]
-    if not kids:
+def place(kid, loc, depth, y_cursor):
+    ch = kids[kid]
+    if not ch:
         y = y_cursor[0]
-        y_cursor[0] += 110.0
+        y_cursor[0] += 90.0
     else:
-        ys = [place(k, depth + 1) for k in kids]
+        ys = [place(c, loc, depth + 1, y_cursor) for c in ch]
         y = sum(ys) / len(ys)
-    pos[nid] = (depth * -260.0, y)     # Wurzel rechts, Measures links
+    pos[(kid, loc)] = (depth * -240.0, y)          # Wurzel rechts, Messgrößen links
     return y
 
 
-for r in roots:
-    place(r, 0)
-    y_cursor[0] += 140.0                # Abstand zwischen den beiden Baeumen
+for loc in locations:
+    cache = {}
+    for kid in catalogue:
+        resolve(kid, loc, cache)                   # Werte fuer diesen Ort berechnen
+    y_cursor = [y_base]
+    for r in roots:
+        place(r, loc, 0, y_cursor)
+        y_cursor[0] += 60.0
+    y_base = y_cursor[0] + 200.0                    # Abstand zwischen Orten
+
+    for kid, c in catalogue.items():
+        val = cache[kid]
+        tgt = c["target"]
+        if not tgt:
+            st = "no target"
+        else:
+            ok = val <= float(tgt) if c["target_direction"] == "min" else val >= float(tgt)
+            st = "reached" if ok else "missed"
+        base = hex_to_rgb(DIMENSIONS.get(c["dimension"], FALLBACK_COLOR))
+        inst[(kid, loc)] = {
+            "value": val, "status": st,
+            "color": lighten(base, level(kid) * LEVEL_LIGHTEN),
+        }
+
 
 # ---------------------------------------------------------------------------
-# 6) CSV-Ausgaben
-# ---------------------------------------------------------------------------
-with open(OUTPUT_DIR / "kpi_values.csv", "w", newline="", encoding="utf-8") as f:
-    w = csv.writer(f, delimiter=";")
-    w.writerow(["id", "label", "node_type", "dimension", "subdimension",
-                "formula", "value", "unit", "target", "status"])
-    for nid in order:
-        n = nodes[nid]
-        if n["node_type"] == "Measure":
-            continue
-        w.writerow([nid, n["label"], n["node_type"], n["dimension"], n["subdimension"],
-                    n["formula"], round(n["value"], 4), n["unit"], n["target"], n["status"]])
-
-with open(OUTPUT_DIR / "node_table.csv", "w", newline="", encoding="utf-8") as f:
-    w = csv.writer(f, delimiter=";")
-    w.writerow(["id", "label", "node_type", "dimension", "subdimension", "level",
-                "parent", "value", "unit", "target", "status",
-                "in_degree", "measures_behind", "size", "color"])
-    for nid in order:
-        n = nodes[nid]
-        w.writerow([nid, n["label"], n["node_type"], n["dimension"], n["subdimension"],
-                    n["level"], n["parent"], round(n["value"], 4), n["unit"],
-                    n["target"], n["status"], indeg[nid], n["measures_behind"],
-                    n["size"], "#%02X%02X%02X" % n["color"]])
-
-# ---------------------------------------------------------------------------
-# 7) GEXF Ausgabe
+# 5) GEXF schreiben
 # ---------------------------------------------------------------------------
 NODE_ATTRS = [("0", "node_type", "string"), ("1", "dimension", "string"),
               ("2", "subdimension", "string"), ("3", "level", "integer"),
               ("4", "unit", "string"), ("5", "value", "double"),
               ("6", "target", "double"), ("7", "status", "string"),
-              ("8", "formula", "string"), ("9", "in_degree", "integer"),
+              ("8", "location_id", "string"), ("9", "factory", "string"),
               ("10", "measures_behind", "integer")]
-EDGE_ATTRS = [("0", "influence", "string"), ("1", "strength", "double"),
-              ("2", "relation", "string"), ("3", "sign", "integer")]
+EDGE_ATTRS = [("0", "strength", "double")]
 
 out = ['<?xml version="1.0" encoding="UTF-8"?>',
        '<gexf xmlns="http://www.gexf.net/1.3" version="1.3" '
        'xmlns:viz="http://www.gexf.net/1.3/viz" '
        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
        'xsi:schemaLocation="http://www.gexf.net/1.3 http://www.gexf.net/1.3/gexf.xsd">',
-       '  <meta><creator>KPI Node-Link Prototype</creator>'
-       '<description>Two KPI trees (Costs / Emissions to air), depth 3</description></meta>',
+       '  <meta><creator>KPI Node-Link (minimal)</creator>'
+       '<description>KPI-Vorlagen x Fabrik-Struktur -> Instanzen je Ort</description></meta>',
        '  <graph defaultedgetype="directed" mode="static">',
        '    <attributes class="node" mode="static">']
 out += [f'      <attribute id="{i}" title="{t}" type="{ty}"/>' for i, t, ty in NODE_ATTRS]
@@ -281,49 +202,67 @@ out += ['    </attributes>', '    <attributes class="edge" mode="static">']
 out += [f'      <attribute id="{i}" title="{t}" type="{ty}"/>' for i, t, ty in EDGE_ATTRS]
 out += ['    </attributes>', '    <nodes>']
 
-for nid in order:
-    n = nodes[nid]
-    r, g, b = n["color"]
-    x, y = pos[nid]
-    out.append(f'      <node id="{nid}" label="{escape(n["label"])}">')
+for (kid, loc), d in inst.items():
+    c = catalogue[kid]
+    r, g, b = d["color"]
+    x, y = pos[(kid, loc)]
+    nid = f"{kid}@{loc}"
+    out.append(f'      <node id="{escape(nid)}" label="{escape(c["label"])}">')
     out.append('        <attvalues>')
-    vals = [("0", n["node_type"]), ("1", n["dimension"]), ("2", n["subdimension"]),
-            ("3", n["level"]), ("4", n["unit"]), ("5", round(n["value"], 4)),
-            ("6", n["target"]), ("7", n["status"]), ("8", n["formula"]),
-            ("9", indeg[nid]), ("10", n["measures_behind"])]
+    vals = [("0", c["node_type"]), ("1", c["dimension"]), ("2", c["subdimension"]),
+            ("3", level(kid)), ("4", c["unit"]), ("5", round(d["value"], 4)),
+            ("6", c["target"]), ("7", d["status"]), ("8", loc),
+            ("9", factory_of(loc)), ("10", mcount[kid])]
     for aid, v in vals:
         if v not in ("", None):
             out.append(f'          <attvalue for="{aid}" value="{escape(str(v))}"/>')
     out.append('        </attvalues>')
-    out.append(f'        <viz:size value="{n["size"]}"/>')
+    out.append(f'        <viz:size value="{size[kid]}"/>')
     out.append(f'        <viz:position x="{x}" y="{y}" z="0.0"/>')
     out.append(f'        <viz:color r="{r}" g="{g}" b="{b}"/>')
     out.append('      </node>')
 
 out.append('    </nodes>')
 out.append('    <edges>')
-for i, e in enumerate(edges):
-    r, g, b = nodes[e["source"]]["color"]       # Kante erbt die Farbe der Quelle
-    sign = 1 if e["influence"] == "positive" else -1
-    out.append(f'      <edge id="{i}" source="{e["source"]}" target="{e["target"]}" '
-               f'weight="{e["strength"]}">')
-    out.append('        <attvalues>')
-    out.append(f'          <attvalue for="0" value="{e["influence"]}"/>')
-    out.append(f'          <attvalue for="1" value="{e["strength"]}"/>')
-    out.append(f'          <attvalue for="2" value="{e["relation"]}"/>')
-    out.append(f'          <attvalue for="3" value="{sign}"/>')
-    out.append('        </attvalues>')
-    out.append(f'        <viz:color r="{r}" g="{g}" b="{b}"/>')
-    out.append(f'        <viz:thickness value="{1 + e["strength"] * 7:.2f}"/>')
-    out.append('      </edge>')
+eid = 0
+for loc in locations:
+    for kid, c in catalogue.items():
+        if not c["formula"]:
+            continue
+        tgt_val = inst[(kid, loc)]["value"]
+        for ref in REF.findall(c["formula"]):
+            src_val = inst[(ref, loc)]["value"]
+            strength = round(min(abs(src_val) / abs(tgt_val), 1.0), 4) if tgt_val else 0.0
+            r, g, b = inst[(ref, loc)]["color"]     # Kante erbt Farbe der Quelle
+            out.append(f'      <edge id="{eid}" source="{escape(ref + "@" + loc)}" '
+                       f'target="{escape(kid + "@" + loc)}" weight="{strength}">')
+            out.append(f'        <attvalues><attvalue for="0" value="{strength}"/></attvalues>')
+            out.append(f'        <viz:color r="{r}" g="{g}" b="{b}"/>')
+            out.append(f'        <viz:thickness value="{1 + strength * 7:.2f}"/>')
+            out.append('      </edge>')
+            eid += 1
 out += ['    </edges>', '  </graph>', '</gexf>']
 
-with open(OUTPUT_DIR / "kpi_model.gexf", "w", encoding="utf-8") as f:
-    f.write("\n".join(out) + "\n")
+(OUT / "kpi_model.gexf").write_text("\n".join(out) + "\n", encoding="utf-8")
 
-print(f"OK: {len(nodes)} nodes, {len(edges)} edges  ->  {OUTPUT_DIR}")
-for nid in order:
-    n = nodes[nid]
-    if n["node_type"] != "Measure":
-        print(f"  {nid:8} {n['label']:42} = {n['value']:>10,.0f} {n['unit']:<12} "
-              f"[{n['status']:<9}] size={n['size']:.0f}")
+# ---------------------------------------------------------------------------
+# 6) Log-Datei
+#    Enthält je KPI und Ort den berechneten Wert und ob der Zielwert
+#    erreicht wurde ([reached] / [missed] / [no target]).
+# ---------------------------------------------------------------------------
+from datetime import datetime
+
+log = [f"Lauf: {datetime.now():%Y-%m-%d %H:%M:%S}",
+       f"{len(inst)} Knoten, {eid} Kanten  ->  {OUT / 'kpi_model.gexf'}",
+       ""]
+for loc in locations:
+    log.append(f"{loc}  ({factory_of(loc)})")
+    for kid, c in catalogue.items():
+        if c["node_type"] != "Measure":
+            d = inst[(kid, loc)]
+            log.append(f"  {c['label']:26} = {d['value']:>12,.2f} "
+                       f"{c['unit']:<10} [{d['status']}]")
+    log.append("")
+
+(OUT / "log.txt").write_text("\n".join(log) + "\n", encoding="utf-8")
+print(f"Fertig. Details siehe {OUT / 'log.txt'}")

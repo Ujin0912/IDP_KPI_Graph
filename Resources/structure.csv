@@ -1,0 +1,7 @@
+node_id;label;level;parent
+F1;Factory 1;Factory;
+F1-L1;Electrode Line;Line;F1
+F1-L1-C1;Formation Cell;Cell;F1-L1
+F2;Factory 2;Factory;
+F2-L1;Electrode Line;Line;F2
+F2-L1-C1;Formation Cell;Cell;F2-L1
