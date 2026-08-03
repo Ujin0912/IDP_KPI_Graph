@@ -86,10 +86,10 @@ Beispiel:
 <img width="377" height="196" alt="image" src="https://github.com/user-attachments/assets/26119427-fd74-4c3b-a4d6-3125e4a52dba" />
 
 ```
-kpi_id;location_id;value\
-ENV-11;F1-L1-C1;900000\
-PROD-01;F1-L1-C1;50000\
-SOC-11;F1-L1-C1;900\
+kpi_id;location_id;value
+ENV-11;F1-L1-C1;900000
+PROD-01;F1-L1-C1;50000
+SOC-11;F1-L1-C1;900
 ENV-11;F2-L1-C1;870000
 ```
 
