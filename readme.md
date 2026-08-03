@@ -36,12 +36,13 @@ Spalten:
 
 Beispiel:
 
+<img width="736" height="192" alt="image" src="https://github.com/user-attachments/assets/8c80b45f-3b06-4818-9379-b53a47c859de" />
+
 ```
 kpi_id;label;node_type;dimension;subdimension;parent;unit;formula;target;target_direction
 ENV-01;Energy per cell;KPI;Environmental;Energy;;kWh/cell;{ENV-11}/{PROD-01};15;min
 ENV-11;Electricity consumption;Measure;Environmental;Energy;ENV-01;kWh;;;
-SOC-01;Training hours per worker;KPI;Social;Workforce;;h/worker;{SOC-11}/{SOC-12};20;max
-COST-01;Cost per cell;KPI;Economic;Cost;;EUR/cell;{COST-02}/{PROD-01};5;min'
+PROD-01;Cells produced;Measure;Economic;Output;COST-01;cell;;;
 ```
 
 2. `structure.csv` — die Fabrik-Struktur
@@ -56,12 +57,18 @@ Spalten:
 
 Beispiel:
 
+<img width="527" height="291" alt="image" src="https://github.com/user-attachments/assets/c3f7e18d-30d4-4f78-912e-06e98ac04bd2" />
+
+
 ```
-node_id;label;level;parent\
-F1;Factory 1;Factory;\
-F1-L1;Electrode Line;Line;F1\
-F1-L1-C1;Formation Cell;Cell;F1-L1\
+node_id;label;level;parent
+F1;Factory 1;Factory;
+F1-L1;Electrode Line;Line;F1
+F1-L1-C1;Formation Cell A;Cell;F1-L1
+F1-L1-C2; Formation Cell B;Cell;F1-L1
 F2;Factory 2;Factory;
+F2-L1;Electrode Line;Line;F2
+F2-L1-C1;Formation Cell;Cell;F2-L1
 ```
 
 3. `measure_data.csv` — die Messwerte
@@ -75,6 +82,8 @@ Spalten:
 - value — Zahl
 
 Beispiel:
+
+<img width="377" height="196" alt="image" src="https://github.com/user-attachments/assets/26119427-fd74-4c3b-a4d6-3125e4a52dba" />
 
 ```
 kpi_id;location_id;value\
