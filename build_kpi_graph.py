@@ -1,43 +1,62 @@
 """
-build_kpi_graph.py
------------------------------
-Kombiniert drei generische CSVs zu einem konkreten Node-Link-Graphen (GEXF).
+build_kpi_graph.py  (auswahl-basiert, PyVis-Ausgabe)
+----------------------------------------------------
+Der Nutzer liefert NUR Messwerte. Das Programm sucht selbst alle KPIs aus dem
+Katalog, die aus diesen Messwerten berechenbar sind, und zeigt den Graphen in
+einem interaktiven PyVis-Fenster (HTML im Browser).
 
-  Resources/kpi_catalogue.csv : KPI-Vorlagen (Formel, Dimension, Zielwert)
+  Resources/kpi_catalogue.csv : ALLE KPI-Vorlagen (Formel, Dimension, Ziel) - der Katalog. Modifizierbar/Anzeigbar mit kpi_catalogue_gui.py
   Resources/structure.csv     : Fabrik-Struktur (Factory / Line / Cell)
-  Resources/measure_data.csv  : Messwert je Messgröße UND Ort
+  Resources/measure_data.csv  : NUR die eingereichten Messwerte (je Messgroesse UND Ort)
 
-Stuktur:
-  Ein KPI ist eine VORLAGE. Jeder Ort mit Messdaten bekommt eine eigene
-  INSTANZ des kompletten KPI-Baums. Knoten-ID = <kpi_id>@<location_id>.
+Auswahl-Regeln:
+  1) RELEVANZ: Ein KPI kommt in den Graphen, wenn ALLE seine Eingaenge aus den
+     eingereichten Messwerten berechenbar sind (Sub-KPIs rekursiv).
+  2) FAKTOR (Standard 0.9): Eine Kante "Kind -> Eltern" wird nur behalten, wenn das
+     Kind den Eltern-KPI um mindestens (1 - Faktor) = 10% beeinflusst. Der Einfluss
+     wird als ELASTIZITAET gemessen (kleine Aenderung des Kindes -> relative
+     Aenderung des Eltern-KPI). Messgroessen/Zweige unter 10% werden weggelassen.
+
+  Der berechnete KPI-Wert nutzt weiterhin ALLE Eingaben (exakt); der Faktor blendet
+  nur schwache Einfluesse aus der Darstellung aus. Ausgeblendeter Anteil wird je KPI
+  als Tooltip und im Log vermerkt.
 """
 
 import csv
 import re
 from collections import defaultdict
 from pathlib import Path
-from xml.sax.saxutils import escape
+
+from pyvis.network import Network      # pip install pyvis
 
 BASE = Path(__file__).resolve().parent
 RES = BASE / "Resources"
 OUT = BASE / "Output"
 OUT.mkdir(exist_ok=True)
 
-# --- Konfiguration: drei Nachhaltigkeitssäulen --
+# --- Konfiguration ---------------------------------------------------------
 DIMENSIONS = {
-    "Environmental": "#1B9E77",   # grün
+    "Environmental": "#1B9E77",   # gruen
     "Economic":      "#D95F02",   # orange
     "Social":        "#7570B3",   # violett
 }
 FALLBACK_COLOR = "#999999"
 LEVEL_LIGHTEN = 0.30              # pro Baum-Ebene heller
-MAX_SIZE = 60.0                   # größter Knoten
-MIN_RATIO = 0.25                  # kleinster Knoten = 25% des größten
+
+RELEVANCE_FACTOR = 0.9           # 0.9 => Einfluesse < 10% werden ausgeblendet
+MIN_IMPACT = 1 - RELEVANCE_FACTOR
+EPS = 1e-3                        # kleine Stoerung fuer die numerische Elastizitaet
+
+MAX_SIZE = 60.0                  # groesster Knoten
+MIN_RATIO = 0.25                 # kleinster Knoten = 25% des groessten
+
+# Rahmenfarbe des Knotens = Zielstatus
+STATUS_BORDER = {"reached": "#2E7D32", "missed": "#C62828", "no target": "#9E9E9E"}
+
+OPEN_IN_BROWSER = True           # HTML nach dem Erzeugen automatisch oeffnen
 
 
-# ---------------------------------------------------------------------------
-# Hilfsfunktionen
-# ---------------------------------------------------------------------------
+# --- Hilfen ----------------------------------------------------------------
 def read(path):
     with open(path, encoding="utf-8") as f:
         return list(csv.DictReader(f, delimiter=";"))
@@ -48,122 +67,174 @@ def hex_to_rgb(h):
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
+def rgb_to_hex(rgb):
+    return "#%02X%02X%02X" % rgb
+
+
 def lighten(rgb, t):
     return tuple(int(round(c + (255 - c) * t)) for c in rgb)
 
 
-# ---------------------------------------------------------------------------
-# 1) Eingaben laden
-# ---------------------------------------------------------------------------
+# --- Eingaben --------------------------------------------------------------
 catalogue = {c["kpi_id"]: c for c in read(RES / "kpi_catalogue.csv")}
 structure = {s["node_id"]: s for s in read(RES / "structure.csv")}
 
-# Messwerte nach Ort gruppieren:  values[location_id][kpi_id] = Zahl
-values = defaultdict(dict)
+values = defaultdict(dict)                     # values[loc][measure_id] = Zahl
 for row in read(RES / "measure_data.csv"):
     values[row["location_id"]][row["kpi_id"]] = float(row["value"])
 
 REF = re.compile(r"\{([^}]+)\}")
 
+# Layout-Hierarchie aus den Formeln ableiten:
+# Wer {X} in seiner Formel referenziert, gilt als Elternteil von X. Bei mehreren
+# referenzierenden KPIs entscheidet das erste - nur fuer Positionierung/Ebene,
+# nicht fuer die Kanten (die kommen weiterhin komplett aus den Formeln).
+parent_of = {kid: "" for kid in catalogue}
+for _pid, _c in catalogue.items():
+    for _ref in REF.findall(_c.get("formula") or ""):
+        if _ref in parent_of and not parent_of[_ref]:
+            parent_of[_ref] = _pid
 
-# ---------------------------------------------------------------------------
-# 2) Formeln je Ort auflösen
-# ---------------------------------------------------------------------------
-def resolve(kid, loc, cache, stack=()):
+
+# --- Berechenbarkeit & Wert (je Ort) --------------------------------------
+# kid = kpi-id, loc = location (e.g. F1-L1-C1), memo zeigt, ob die jeweilige ID berechenbar ist.
+def computable(kid, loc, memo):
+    if kid in memo:
+        return memo[kid]
+    node = catalogue.get(kid)
+    if node is None:                           # ID unbekannt -> nicht berechenbar
+        memo[kid] = False
+        return False
+    if not node["formula"]:                    # Messgroesse: berechenbar, wenn eingereicht
+        memo[kid] = kid in values[loc]
+        return memo[kid]
+    memo[kid] = all(computable(r, loc, memo) for r in REF.findall(node["formula"]))
+    return memo[kid]
+
+# cache zeigt den Zahlenwert als Zwischenspeicher fuer die jeweilige ID
+def value(kid, loc, cache):
     if kid in cache:
         return cache[kid]
     node = catalogue[kid]
-    if not node["formula"]:                       # Messgröße -> Wert aus measure_data
-        if kid not in values[loc]:
-            raise ValueError(f"Messwert fehlt: {kid} @ {loc}")
+    if not node["formula"]:
         cache[kid] = values[loc][kid]
         return cache[kid]
-    if kid in stack:
-        raise ValueError(f"Zirkuläre Formel: {' -> '.join(stack + (kid,))}")
-    expr = REF.sub(lambda m: repr(resolve(m.group(1), loc, cache, stack + (kid,))),
-                   node["formula"])
+    expr = REF.sub(lambda m: repr(value(m.group(1), loc, cache)), node["formula"])
     cache[kid] = float(eval(expr, {"__builtins__": {}}, {}))
     return cache[kid]
 
 
-# ---------------------------------------------------------------------------
-# 3) Struktur der Vorlage: Baum (parent) + Einfluss (Formel)
-# ---------------------------------------------------------------------------
-kids = defaultdict(list)                           # parent-Spalte -> Layout-Baum
-for kid, c in catalogue.items():
-    if c["parent"]:
-        kids[c["parent"]].append(kid)
-roots = [k for k, c in catalogue.items() if not c["parent"]]
+# Einfluss Kindknoten -> Elternknoten
+def elasticity(parent, ref, loc, cache):
+    """Relative Aenderung des Eltern-KPI bei kleiner Aenderung des Kindes 'ref'."""
+    base = value(parent, loc, cache)
+    cv = value(ref, loc, cache)
+    if cv == 0 or base == 0:
+        return 0.0
+    bumped = cv * (1 + EPS)
+    expr = REF.sub(lambda m: repr(bumped if m.group(1) == ref else value(m.group(1), loc, cache)),
+                   catalogue[parent]["formula"])
+    newp = float(eval(expr, {"__builtins__": {}}, {}))
+    return abs((newp - base) / base / EPS)
 
 
-def level(kid):
-    lvl, cur = 0, catalogue[kid]
-    while cur["parent"]:
-        lvl, cur = lvl + 1, catalogue[cur["parent"]]
-    return lvl
+# --- Auswahl je Ort: relevante, berechenbare KPIs + starke Kanten ----------
+def select(loc):
+    memo, cache = {}, {}
+    # "Top"-KPIs: berechenbar und ohne berechenbaren Eltern (Wurzeln der Auswahl)
+    tops = [k for k, c in catalogue.items()
+            if c["formula"] and computable(k, loc, memo)
+            and (not parent_of[k] or not computable(parent_of[k], loc, memo))]
+
+    kept, edges, pruned = set(), [], []        # pruned: (ref, parent, share) unter der Schwelle
+    def keep(kid):
+        kept.add(kid)
+        c = catalogue[kid]
+        if not c["formula"]:
+            return
+        value(kid, loc, cache)                 # Cache fuellen
+        for ref in REF.findall(c["formula"]):
+            if not computable(ref, loc, memo):
+                continue
+            e = elasticity(kid, ref, loc, cache)
+            if e >= MIN_IMPACT:
+                edges.append((ref, kid, e))
+                if ref not in kept:
+                    keep(ref)
+            else:
+                pruned.append((ref, kid, e))   # < 10% -> weglassen
+    for t in tops:
+        keep(t)
+    return kept, edges, pruned, cache
 
 
-def feeding_measures(kid):                         # Messgrößen, die (via Formel) einfliessen
-    node = catalogue[kid]
-    if not node["formula"]:
-        return {kid}
-    s = set()
-    for ref in REF.findall(node["formula"]):
-        s |= feeding_measures(ref)
-    return s
+# --- Alles zusammenbauen ---------------------------------------------------
+locations = list(values)
+inst = {}                                      # (kid, loc) -> Attribute
+kept_edges_all = []                            # (src, tgt, strength, loc)
+pruned_all = defaultdict(list)                 # loc -> [(ref, parent, share)]
+pos = {}
+y_base = 0.0
 
 
-mcount = {kid: (0 if not c["formula"] else len(feeding_measures(kid)))
-          for kid, c in catalogue.items()}
-
-# Größe: Anzahl einfließender Messgrößen linear auf [min_size, MAX_SIZE]
-lo, hi = min(mcount.values()), max(mcount.values())
-span = (hi - lo) or 1
-min_size = MAX_SIZE * MIN_RATIO
-size = {kid: min_size + (mcount[kid] - lo) / span * (MAX_SIZE - min_size)
-        for kid in catalogue}
-
-
-def factory_of(locid):                             # oberster Knoten
+def factory_of(locid):
     cur = structure[locid]
     while cur["parent"]:
         cur = structure[cur["parent"]]
     return cur["node_id"]
 
 
-# ---------------------------------------------------------------------------
-# 4) Instanzen erzeugen: pro Ort mit Daten ein kompletter KPI-Baum
-# ---------------------------------------------------------------------------
-inst = {}                                          # (kid, loc) -> dict mit value/status/pos...
-pos = {}
-y_base = 0.0
-locations = list(values)                           # Orte, die Messdaten haben
-
-
-def place(kid, loc, depth, y_cursor):
-    ch = kids[kid]
-    if not ch:
-        y = y_cursor[0]
-        y_cursor[0] += 90.0
-    else:
-        ys = [place(c, loc, depth + 1, y_cursor) for c in ch]
-        y = sum(ys) / len(ys)
-    pos[(kid, loc)] = (depth * -240.0, y)          # Wurzel rechts, Messgrößen links
-    return y
-
-
 for loc in locations:
-    cache = {}
-    for kid in catalogue:
-        resolve(kid, loc, cache)                   # Werte fuer diesen Ort berechnen
-    y_cursor = [y_base]
-    for r in roots:
-        place(r, loc, 0, y_cursor)
-        y_cursor[0] += 60.0
-    y_base = y_cursor[0] + 200.0                    # Abstand zwischen Orten
+    kept, edges, pruned, cache = select(loc)
+    pruned_all[loc] = pruned
 
-    for kid, c in catalogue.items():
-        val = cache[kid]
+    # Kinder je Eltern (nur behaltene Kanten) fuer Layout + measures_behind
+    children = defaultdict(list)
+    for ref, parent, e in edges:
+        children[parent].append(ref)
+    roots = [k for k in kept if not parent_of[k] or parent_of[k] not in kept]
+
+    def level(kid):
+        lvl, cur = 0, kid
+        while parent_of[cur] in kept:
+            lvl, cur = lvl + 1, parent_of[cur]
+        return lvl
+
+    def measures_behind(kid):
+        c = catalogue[kid]
+        if not c["formula"] or kid not in kept:
+            return 1 if not c["formula"] else 0
+        leaves = 0
+        for ch in children[kid]:
+            leaves += 1 if not catalogue[ch]["formula"] else measures_behind(ch)
+        return leaves
+
+    # Layout: ein Baum je Wurzel, Ebene = x, Geschwister ueber y
+    y_cursor = [y_base]
+
+    def place(kid, depth):
+        ch = children[kid]
+        if not ch:
+            y = y_cursor[0]
+            y_cursor[0] += 90.0
+        else:
+            y = sum(place(c, depth + 1) for c in ch) / len(ch)
+        pos[(kid, loc)] = (depth * -240.0, y)
+        return y
+    for r in roots:
+        place(r, 0)
+        y_cursor[0] += 60.0
+    y_base = y_cursor[0] + 200.0
+
+    # ausgeblendeter Anteil je Eltern (additiv, zur Transparenz)
+    pruned_share = defaultdict(float)
+    for ref, parent, e in pruned:
+        p = value(parent, loc, cache)
+        pruned_share[parent] += abs(value(ref, loc, cache) / p) if p else 0.0
+
+    for kid in kept:
+        c = catalogue[kid]
+        val = value(kid, loc, cache)
         tgt = c["target"]
         if not tgt:
             st = "no target"
@@ -173,96 +244,111 @@ for loc in locations:
         base = hex_to_rgb(DIMENSIONS.get(c["dimension"], FALLBACK_COLOR))
         inst[(kid, loc)] = {
             "value": val, "status": st,
-            "color": lighten(base, level(kid) * LEVEL_LIGHTEN),
+            "color": rgb_to_hex(lighten(base, level(kid) * LEVEL_LIGHTEN)),
+            "level": level(kid), "mbehind": measures_behind(kid),
+            "pruned_share": round(pruned_share.get(kid, 0.0), 4),
         }
+    for ref, parent, e in edges:
+        kept_edges_all.append((ref, parent, round(min(e, 1.0), 4), loc))
 
+# --- Groessen ueber alle behaltenen Knoten normieren -----------------------
+if inst:
+    counts = [d["mbehind"] for d in inst.values()]
+    lo, hi = min(counts), max(counts)
+    span = (hi - lo) or 1
+    min_size = MAX_SIZE * MIN_RATIO
+    for d in inst.values():
+        d["size"] = min_size + (d["mbehind"] - lo) / span * (MAX_SIZE - min_size)
 
 # ---------------------------------------------------------------------------
-# 5) GEXF schreiben
+# PyVis-Ausgabe
 # ---------------------------------------------------------------------------
-NODE_ATTRS = [("0", "node_type", "string"), ("1", "dimension", "string"),
-              ("2", "subdimension", "string"), ("3", "level", "integer"),
-              ("4", "unit", "string"), ("5", "value", "double"),
-              ("6", "target", "double"), ("7", "status", "string"),
-              ("8", "location_id", "string"), ("9", "factory", "string"),
-              ("10", "measures_behind", "integer")]
-EDGE_ATTRS = [("0", "strength", "double")]
+net = Network(height="800px", width="100%", directed=True,
+              bgcolor="#ffffff", font_color="#222222")
+# feste Positionen aus unserem Baum-Layout; Knoten/Kanten bewegen sich nicht
+net.toggle_physics(False)
 
-out = ['<?xml version="1.0" encoding="UTF-8"?>',
-       '<gexf xmlns="http://www.gexf.net/1.3" version="1.3" '
-       'xmlns:viz="http://www.gexf.net/1.3/viz" '
-       'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
-       'xsi:schemaLocation="http://www.gexf.net/1.3 http://www.gexf.net/1.3/gexf.xsd">',
-       '  <meta><creator>KPI Node-Link (minimal)</creator>'
-       '<description>KPI-Vorlagen x Fabrik-Struktur -> Instanzen je Ort</description></meta>',
-       '  <graph defaultedgetype="directed" mode="static">',
-       '    <attributes class="node" mode="static">']
-out += [f'      <attribute id="{i}" title="{t}" type="{ty}"/>' for i, t, ty in NODE_ATTRS]
-out += ['    </attributes>', '    <attributes class="edge" mode="static">']
-out += [f'      <attribute id="{i}" title="{t}" type="{ty}"/>' for i, t, ty in EDGE_ATTRS]
-out += ['    </attributes>', '    <nodes>']
+
+def tooltip(kid, loc, d):
+    c = catalogue[kid]
+    lines = [f"<b>{c['label']}</b> ({kid})",
+             f"Typ: {c['node_type']}",
+             f"Dimension: {c['dimension']} / {c['subdimension']}",
+             f"Wert: {d['value']:,.2f} {c['unit']}",
+             f"Ort: {loc}  (Fabrik {factory_of(loc)})"]
+    if c["formula"]:
+        lines.append(f"Formel: {c['formula']}")
+    if c["target"]:
+        lines.append(f"Ziel: {c['target']} ({c['target_direction']}) &rarr; {d['status']}")
+    if d["pruned_share"]:
+        lines.append(f"ausgeblendeter Einfluss: {d['pruned_share']:.0%}")
+    return "<br>".join(lines)
+
 
 for (kid, loc), d in inst.items():
     c = catalogue[kid]
-    r, g, b = d["color"]
     x, y = pos[(kid, loc)]
-    nid = f"{kid}@{loc}"
-    out.append(f'      <node id="{escape(nid)}" label="{escape(c["label"])}">')
-    out.append('        <attvalues>')
-    vals = [("0", c["node_type"]), ("1", c["dimension"]), ("2", c["subdimension"]),
-            ("3", level(kid)), ("4", c["unit"]), ("5", round(d["value"], 4)),
-            ("6", c["target"]), ("7", d["status"]), ("8", loc),
-            ("9", factory_of(loc)), ("10", mcount[kid])]
-    for aid, v in vals:
-        if v not in ("", None):
-            out.append(f'          <attvalue for="{aid}" value="{escape(str(v))}"/>')
-    out.append('        </attvalues>')
-    out.append(f'        <viz:size value="{size[kid]}"/>')
-    out.append(f'        <viz:position x="{x}" y="{y}" z="0.0"/>')
-    out.append(f'        <viz:color r="{r}" g="{g}" b="{b}"/>')
-    out.append('      </node>')
+    net.add_node(
+        f"{kid}@{loc}",
+        label=c["label"],
+        title=tooltip(kid, loc, d),
+        color={"background": d["color"],
+               "border": STATUS_BORDER.get(d["status"], "#9E9E9E")},
+        borderWidth=3,
+        shape="dot",
+        size=d["size"] / 2.0,                 # PyVis-Groesse etwas kleiner skaliert
+        x=x, y=y, physics=False,
+    )
 
-out.append('    </nodes>')
-out.append('    <edges>')
-eid = 0
-for loc in locations:
-    for kid, c in catalogue.items():
-        if not c["formula"]:
-            continue
-        tgt_val = inst[(kid, loc)]["value"]
-        for ref in REF.findall(c["formula"]):
-            src_val = inst[(ref, loc)]["value"]
-            strength = round(min(abs(src_val) / abs(tgt_val), 1.0), 4) if tgt_val else 0.0
-            r, g, b = inst[(ref, loc)]["color"]     # Kante erbt Farbe der Quelle
-            out.append(f'      <edge id="{eid}" source="{escape(ref + "@" + loc)}" '
-                       f'target="{escape(kid + "@" + loc)}" weight="{strength}">')
-            out.append(f'        <attvalues><attvalue for="0" value="{strength}"/></attvalues>')
-            out.append(f'        <viz:color r="{r}" g="{g}" b="{b}"/>')
-            out.append(f'        <viz:thickness value="{1 + strength * 7:.2f}"/>')
-            out.append('      </edge>')
-            eid += 1
-out += ['    </edges>', '  </graph>', '</gexf>']
+for src, tgt, strength, loc in kept_edges_all:
+    net.add_edge(
+        f"{src}@{loc}", f"{tgt}@{loc}",
+        value=strength,                        # Kantendicke ~ Einfluss
+        title=f"Einfluss: {strength:.0%}",
+        color=inst[(src, loc)]["color"],
+        arrows="to",
+    )
 
-(OUT / "kpi_model.gexf").write_text("\n".join(out) + "\n", encoding="utf-8")
+# kleine Legende als eigenstaendige Knoten (rechts oben, ohne Kanten)
+if inst:
+    lx = max(x for x, _ in pos.values()) + 260
+    ly = min(y for _, y in pos.values())
+    for i, (dim, col) in enumerate(DIMENSIONS.items()):
+        net.add_node(f"_legend_dim_{i}", label=dim, shape="dot", size=12,
+                     color={"background": col, "border": col},
+                     x=lx, y=ly + i * 55, physics=False, font={"size": 14})
+    for j, (stat, col) in enumerate(STATUS_BORDER.items()):
+        net.add_node(f"_legend_stat_{j}", label=f"Ziel: {stat}", shape="dot", size=12,
+                     color={"background": "#ffffff", "border": col},
+                     borderWidth=3, x=lx, y=ly + (len(DIMENSIONS) + j) * 55 + 30,
+                     physics=False, font={"size": 14})
 
-# ---------------------------------------------------------------------------
-# 6) Log-Datei
-#    Enthält je KPI und Ort den berechneten Wert und ob der Zielwert
-#    erreicht wurde ([reached] / [missed] / [no target]).
-# ---------------------------------------------------------------------------
+out_html = OUT / "kpi_model.html"
+net.write_html(str(out_html), open_browser=False, notebook=False)
+
+if OPEN_IN_BROWSER:
+    import webbrowser
+    webbrowser.open(out_html.as_uri())
+
+# --- Log -------------------------------------------------------------------
 from datetime import datetime
-
 log = [f"Lauf: {datetime.now():%Y-%m-%d %H:%M:%S}",
-       f"{len(inst)} Knoten, {eid} Kanten  ->  {OUT / 'kpi_model.gexf'}",
+       f"Relevanz-Faktor {RELEVANCE_FACTOR} (Einfluss-Schwelle {MIN_IMPACT:.0%})",
+       f"{len(inst)} Knoten, {len(kept_edges_all)} Kanten  ->  {out_html}",
        ""]
 for loc in locations:
-    log.append(f"{loc}  ({factory_of(loc)})")
-    for kid, c in catalogue.items():
+    log.append(f"{loc}  ({factory_of(loc)})   eingereichte Messwerte: {len(values[loc])}")
+    for kid in [k for (k, l) in inst if l == loc]:
+        c = catalogue[kid]
         if c["node_type"] != "Measure":
             d = inst[(kid, loc)]
-            log.append(f"  {c['label']:26} = {d['value']:>12,.2f} "
-                       f"{c['unit']:<10} [{d['status']}]")
+            extra = f"  (ausgeblendet: {d['pruned_share']:.0%})" if d["pruned_share"] else ""
+            log.append(f"  {c['label']:34} = {d['value']:>12,.2f} {c['unit']:<6} "
+                       f"[{d['status']}]{extra}")
+    if pruned_all[loc]:
+        log.append("  ausgeblendete Einfluesse (< Schwelle):")
+        for ref, parent, e in pruned_all[loc]:
+            log.append(f"    {catalogue[ref]['label']} -> {catalogue[parent]['label']}: {e:.1%}")
     log.append("")
-
 (OUT / "log.txt").write_text("\n".join(log) + "\n", encoding="utf-8")
-print(f"Fertig. Details siehe {OUT / 'log.txt'}")
+print(f"Fertig. Graph: {out_html}  -  Details siehe {OUT / 'log.txt'}")

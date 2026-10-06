@@ -1,11 +1,13 @@
-kpi_id;label;node_type;dimension;subdimension;parent;unit;formula;target;target_direction
-COST-01;Cost per cell;KPI;Economic;Cost;;EUR/cell;{COST-02}/{PROD-01};5;min
-COST-02;Total cost;Sub-KPI;Economic;Cost;COST-01;EUR;{COST-11}+{COST-12};;
-COST-11;Energy cost;Measure;Economic;Cost;COST-02;EUR;;;
-COST-12;Material cost;Measure;Economic;Cost;COST-02;EUR;;;
-PROD-01;Cells produced;Measure;Economic;Output;COST-01;cell;;;
-ENV-01;Energy per cell;KPI;Environmental;Energy;;kWh/cell;{ENV-11}/{PROD-01};15;min
-ENV-11;Electricity consumption;Measure;Environmental;Energy;ENV-01;kWh;;;
-SOC-01;Training hours per worker;KPI;Social;Workforce;;h/worker;{SOC-11}/{SOC-12};20;max
-SOC-11;Training hours;Measure;Social;Workforce;SOC-01;h;;;
-SOC-12;Workers;Measure;Social;Workforce;SOC-01;worker;;;
+kpi_id;label;node_type;dimension;subdimension;unit;formula;target;target_direction;author;comment
+COST-01;Cost per cell;KPI;Economic;Cost;EUR/cell;{COST-02}/{PROD-01};5;min;Standard;
+COST-02;Total cost;Sub-KPI;Economic;Cost;EUR;{COST-11}+{COST-12};;;Standard;
+COST-11;Energy cost;Measure;Economic;Cost;EUR;;3;max;Standard;
+COST-12;Material cost;Measure;Economic;Cost;EUR;;;;Standard;
+PROD-01;Cells produced;Measure;Economic;Output;;;;;Standard;
+ENV-01;Energy per cell;KPI;Environmental;Energy;;{ENV-11}/{PROD-01};15;min;Standard;
+ENV-11;Electricity consumption;Measure;Environmental;Energy;;;;;Standard;
+Example;Example KPI;KPI;Environmental;Cost;;{COST-12}+{COST-02}+{COST-11};;;Standard;
+SOC-1;Employees Group 1;Measure;Social;Soc;persons;;;;Standard;
+SOC-2;Employees Group 2;Measure;Social;Soc;persons;;3;max;Standard;
+SOC-3;Total Employees;KPI;Social;Soc;persons;{SOC-1}+{SOC-2};;;Standard;Testkommentar
+SOC-4;Test KPI;Sub-KPI;Economic;Test;;{SOC-1}-(2*{SOC-2});5;max;Standard;Test
