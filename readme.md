@@ -17,7 +17,7 @@ Benötigte Dateien (im Ordner `Resources/`)
 Alle drei Dateien sind CSV mit Semikolon (;) als Trennzeichen und müssen 
 im Ordner `Resources/` liegen.
 
-1. `kpi_catalogue.csv` — die KPI-Vorlagen
+1. `kpi_catalogue.csv` — die KPI-Vorlagen <!-- TODO: Verschiedene Nutzer beschreiben -->
 
 Eine Zeile pro KPI, Sub-KPI oder Messgröße. \
 Spalten:
@@ -27,16 +27,19 @@ Spalten:
 - node_type — KPI, Sub-KPI oder Measure
 - dimension — eine von: Environmental, Economic, Social
 - subdimension — freier Text zur Gruppierung (z.B. Cost, Energy, Workforce)
-- parent — kpi_id des übergeordneten Knotens (leer bei der Wurzel)
 - unit — Einheit (z.B. EUR/cell)
 - formula — Berechnung über andere IDs in {...}, z.B. {ENV-11}/{PROD-01} 
 - (leer bei einer Messgröße)
 - target — Zielwert (leer, wenn kein Ziel)
 - target_direction — min (kleiner ist besser) oder max (größer ist besser)
+- author — Author (Standard ist default-Wert)
+- comment — Kommentar (für alle zugänglich)
+
 
 Beispiel:
 
-<img width="736" height="192" alt="image" src="https://github.com/user-attachments/assets/8c80b45f-3b06-4818-9379-b53a47c859de" />
+<img width="1010" height="192" alt="image" src="https://github.com/user-attachments/assets/a2102cfd-9bb1-43ee-a6da-1de3e8c4fe89" />
+
 
 ```
 kpi_id;label;node_type;dimension;subdimension;unit;formula;target;target_direction;author;comment
@@ -59,6 +62,7 @@ Beispiel:
 
 <img width="527" height="291" alt="image" src="https://github.com/user-attachments/assets/c3f7e18d-30d4-4f78-912e-06e98ac04bd2" />
 
+<!-- TODO: Parent weglassen? -->
 
 ```
 node_id;label;level;parent
