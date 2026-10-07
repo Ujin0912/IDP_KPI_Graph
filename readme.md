@@ -39,10 +39,10 @@ Beispiel:
 <img width="736" height="192" alt="image" src="https://github.com/user-attachments/assets/8c80b45f-3b06-4818-9379-b53a47c859de" />
 
 ```
-kpi_id;label;node_type;dimension;subdimension;parent;unit;formula;target;target_direction
-ENV-01;Energy per cell;KPI;Environmental;Energy;;kWh/cell;{ENV-11}/{PROD-01};15;min
-ENV-11;Electricity consumption;Measure;Environmental;Energy;ENV-01;kWh;;;
-PROD-01;Cells produced;Measure;Economic;Output;COST-01;cell;;;
+kpi_id;label;node_type;dimension;subdimension;unit;formula;target;target_direction;author;comment
+COST-01;Cost per cell;KPI;Economic;Cost;EUR/cell;{ENV-11}/{PROD-01};5;min;Standard;
+ENV-11;Electricity consumption;Measure;Environmental;Energy;kWh;;;;Standard;Sample Comment
+PROD-01;Cells produced;Measure;Economic;Output;cell;;;;Author 2;Sample Comment 2
 ```
 
 2. `structure.csv` — die Fabrik-Struktur
@@ -104,22 +104,21 @@ PyCharm oder aus dem Terminal):
 
 Die Ergebnisse liegen danach im Ordner `Output/`:
 
-- `kpi_model.gexf` — der Graph zum Öffnen in Gephi
-- `log.txt` — Protokoll des Laufs. Hier steht je KPI und Ort der berechnete 
-- Wert und ob der Zielwert erreicht wurde ([reached] / [missed] / 
-- [no target]).
+- `kpi_model.html` — der Graph zum Öffnen in Gephi
+- `log.txt` — Protokoll des Laufs. Hier steht je KPI und Ort der berechnete Wert und ob der Zielwert erreicht wurde ([reached] / [missed] /[no target]).
 
 Ordnerstruktur
 
 ```
 pythonProject/
 ├── build_kpi_graph.py
+├── kpi_catalogue_gui.py
 ├── README.md
 ├── Resources/
 │   ├── kpi_catalogue.csv
 │   ├── structure.csv
 │   └── measure_data.csv
-└── Output/            (wird automatisch erzeugt)
-    ├── kpi_model.gexf
-    └── log.txt
+└── Output/            (wird automatisch erzeugt)   
+    ├── kpi_model.html
+	  └── log.txt
 ```
