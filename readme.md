@@ -17,6 +17,8 @@ Benötigte Dateien (im Ordner `Resources/`)
 Alle drei Dateien sind CSV mit Semikolon (;) als Trennzeichen und müssen 
 im Ordner `Resources/` liegen.
 
+<!-- TODO: pip install -r requirements.txt als Requirement hinzufuegen -->
+
 1. `kpi_catalogue.csv` — die KPI-Vorlagen <!-- TODO: Verschiedene Nutzer beschreiben -->
 
 Eine Zeile pro KPI, Sub-KPI oder Messgröße. \
@@ -47,6 +49,19 @@ COST-01;Cost per cell;KPI;Economic;Cost;EUR/cell;{ENV-11}/{PROD-01};5;min;Standa
 ENV-11;Electricity consumption;Measure;Environmental;Energy;kWh;;;;Standard;Sample Comment
 PROD-01;Cells produced;Measure;Economic;Output;cell;;;;Author 2;Sample Comment 2
 ```
+
+Diese Liste kann auch einfach bearbeitet werden, indem man die GUI mit folgendem Befehl ausführt:
+```
+python kpi_catalogue_gui.py
+```
+Diese sieht dann aus wie folgt:
+![img.png](img.png)
+
+Hier kann man über "Add KPI" eine KPI hinzufügen oder ausgewählte KPIs über "Delete selected" löschen.
+Des Weiteren kann man auch die Visualisierung über "Build Graph" starten.
+
+<!-- TODO: Verschiedene Nutzer beschreiben -->
+
 
 2. `structure.csv` — die Fabrik-Struktur
 
